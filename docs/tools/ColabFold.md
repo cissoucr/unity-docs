@@ -55,12 +55,12 @@ The example of batch scripts provided below should be considered for users deali
 
 Finding homologous proteins using MMSeqs2 can be done by running a batch script using the SBATCH command: `sbatch <path to batch script file>`
 
-The code below is an example of a batch script to run MMSeqs2. The top of the script contains the instruction to use bash to execute the commands (`#!/bin/bash`) and the SBATCH parameters (`#SBATCH <parameter>`) followed by the different modules required to run MMSeqs2 through ColabFold.
+The code below is an example of a batch script to run MMSeqs2 (version 14-7e284). The top of the script contains the instruction to use bash to execute the commands (`#!/bin/bash`) and the SBATCH parameters (`#SBATCH <parameter>`) followed by the different modules required to run MMSeqs2 through ColabFold.
 
 
 ```bash
 #!/bin/bash
-#SBATCH --partition=cpu
+#SBATCH --partition=cpu,cpu-preempt,cpu-long
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=200G
@@ -71,6 +71,8 @@ The code below is an example of a batch script to run MMSeqs2. The top of the sc
 module load uri
 module load MMseqs2/14-7e284-gompi-2021b
 module load miniconda
+module load cudnn/cuda11-8.4.1.50
+module load cuda/11.4.0
 source ~/.bashrc
 conda activate colabfold
 ```
@@ -80,7 +82,7 @@ The command `colabfold_search` shown below is added after activating the conda e
 
 
 ```
-colabfold_search <path to fasta file> /datasets/bio/colabfold <path to output directory> --db1 uniref30_2202/uniref30_2202_db --db3 colabfold_envdb_202108/colabfold_envdb_202108_db --use-env 1 --use-templates 0
+colabfold_search <path to fasta file> /datasets/bio/colabfold <path to output directory> --db1 uniref30_2202/uniref30_2202_db --db3 colabfold_envdb_202108/colabfold_envdb_202108_db --use-env 1 --use-templates 0 --threads $SLURM_CPUS_ON_NODE
 ```
 
 
@@ -92,9 +94,9 @@ To use the PDB70 templates database, the parameter `--use-templates` should be s
 * Note that it is recommended to request at least 200G using `#SBATCH --mem=200G` in order to load the protein databases.
 * Running colabfold_search with 1,762 proteins, the UniRef30 and environmental databases and the highest mmseqs sensitivity (s = 8) on a gpu A100 node with 64 threads takes approximately 3h.
 
-### Train models and make predictions with ColabFold using a batch script
+### Make predictions with ColabFold using a batch script
 
-A batch script can be used to train models and make predictions with ColabFold. It should be noted that predictions on proteins longer than 1000bp should be run on a GPU node with at least 40GB VRAM and that the whole process can be expedited on a large set of input protein sequences by submitting the batch script as an [array job](https://slurm.schedmd.com/job_array.html).
+A batch script can be used to make predictions with ColabFold. It should be noted that predictions on proteins longer than 1000bp should be run on a GPU node with at least 40GB VRAM and that the whole process can be expedited on a large set of input protein sequences by submitting the batch script as an [array job](https://slurm.schedmd.com/job_array.html).
 
 The code below provides an example on how to make predictions using `colabfold_batch` in a batch script:
 
@@ -103,10 +105,10 @@ The parameter `--stop-at-score` is used to stop generating models until the pred
 
 ```bash
 #!/bin/bash
-#SBATCH --partition=uri-gpu
-#SBATCH --nodes=1
+#SBATCH --partition=gpu,gpu-long,gpu-preempt
+#SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-gpu=16
-#SBATCH -mem-per-gpu=80
+#SBATCH --mem-per-gpu=80
 #SBATCH -t 05:00:00
 #SBATCH -o slurm-%j.out
 #SBATCH -e slurm-%j.err
@@ -118,7 +120,7 @@ source ~/.bashrc
 
 conda activate colabfold
 
-colabfold_batch <path to directory containing MSAs> <path to output directory> --stop-at-score 85 --msa-mode 'MMseqs2 (UniRef+Environmental)'
+colabfold_batch <path to directory containing MSAs> <path to output directory> --stop-at-score 85 
 ```
 
 The `colabfold_batch` command above will create the following files in the provided output directory for each input protein sequence:
@@ -131,7 +133,7 @@ The `colabfold_batch` command above will create the following files in the provi
 
 * `{*}_predicted_aligned_error_v1.json` → raw data with PAE for all residue pairs for each of the 5 trained models.
 
-The next 2 files are generated for the 5 trained models:
+The next 2 files are generated for the 5 models:
 
 * `{*}_unrelaxed_rank_1_model_1.pdb` → PDB format text file containing the predicted structure obtained from model 1.
 * `{*}_unrelaxed_rank_1_model_1_scores.json` → raw data with the pLDDT scores for each residue of the protein structure obtained from model 1.
@@ -140,6 +142,8 @@ The next 2 files are generated for the 5 trained models:
 #### Notes:
 * `<path to directory containing MSAs>` is the same as `<path to the output directory>` used with the `colabfold_search` command.
 * `<path to output directory>` is the full path to an existing directory used to store the results.
+* When dealing with a large number of sequences, it is recommended to sort proteins into batches based on their size and submit a job to GPU nodes with smaller VRAM for those batches with shorter proteins.
+* Note that colabfold will disregard input protein sequences that have already been predicted. Therefore, the same batch script can be resubmitted in case a job ended before finishing and colabfold_batch will resume inference of the remaining protein sequences.
 
 
 # Full list of parameters for colabfold_search and colabfold_batch
@@ -184,7 +188,7 @@ colabfold_batch [-h]   [--stop-at-score STOP_AT_SCORE]
                        [--recompile-padding RECOMPILE_PADDING]
                        [--model-order MODEL_ORDER] [--host-url HOST_URL]
                        [--data DATA]
-                       [--msa-mode {MMseqs2 UniRef+Environmental),MMseqs2 (UniRef only,single_sequence}]
+                       [--msa-mode {'mmseqs2_uniref_env', 'mmseqs2_uniref', 'single_sequence'}]
                        [--model-type {auto,AlphaFold2-ptm,AlphaFold2-multimer-v1,AlphaFold2-multimer-v2}]
                        [--amber] [--templates]
                        [--custom-template-path CUSTOM_TEMPLATE_PATH] [--env]
